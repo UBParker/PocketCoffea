@@ -47,6 +47,13 @@ class ttHbbBaseProcessor(BaseProcessorABC):
             self.events["JetGood"], self.params.btagging.working_point[self._year]
         )
 
+
+
+        if self.cfg.finalstate == 'dilepton':
+            self.events["ll"] = get_dilepton(
+                self.events.ElectronGood, self.events.MuonGood
+            )
+
         self.events["FatJetGood"], self.jetGoodMask = jet_selection(
             self.events, "FatJet", self.cfg.finalstate
         )

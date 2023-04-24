@@ -203,6 +203,7 @@ def jet_selection(events, jet_type, params, leptons_collection=""):
 
     jets = events[jet_type]
     cuts = params.object_preselection[jet_type]
+
     goodEcalCalib = events["Flag"].ecalBadCalibFilter
     # Only jets that are more distant than dr to ALL leptons are tagged as good jets
     # Mask for  jets not passing the preselection
@@ -230,6 +231,8 @@ def jet_selection(events, jet_type, params, leptons_collection=""):
         ecalMask = ak.broadcast_arrays(goodEcalCalib,jets.pt)
         ecalMask = ecalMask[0]
         mask_good_jets = mask_presel & mask_lepton_cleaning & ecalMask
+
+
 
     return jets[mask_good_jets], mask_good_jets
 
