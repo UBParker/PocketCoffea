@@ -108,12 +108,16 @@ class Sample:
             records = json.load(os.popen(command))
             for record in records:
                 parent = record['parent']
-                assert len(parent) == 1, f"The dataset {das_name} has none or more than one parent ({len(parent)})."
+                assert (
+                    len(parent) == 1
+                ), f"The dataset {das_name} has none or more than one parent ({len(parent)})."
                 parent_name = parent[0]['name']
                 parent_format = "MINIAODSIM" if self.metadata["isMC"] else "MINIAOD"
                 if parent_name.endswith(parent_format):
                     self.parentslist.append(parent_name)
-            assert len(self.parentslist) == 1, f"The dataset {das_name} has none or more than one parent ({len(self.parentslist)})."
+            assert (
+                len(self.parentslist) == 1
+            ), f"The dataset {das_name} has none or more than one parent ({len(self.parentslist)})."
             self.metadata["parents"] = self.parentslist
         return self.parentslist
 
@@ -128,13 +132,7 @@ class Sample:
 
 
 class Dataset:
-    def __init__(
-        self,
-        name,
-        cfg,
-        sites_cfg=None,
-        append_parents=False
-    ):
+    def __init__(self, name, cfg, sites_cfg=None, append_parents=False):
         self.cfg = cfg
         self.prefix = cfg.get("storage_prefix", None)
         self.name = name
@@ -144,18 +142,25 @@ class Dataset:
         self.sample_dict_concrete = {}
         self.sample_dict_local = {}
         self.samples_obj = []
-        self.sites_cfg = sites_cfg if sites_cfg else {
-            "whitelist_sites": None,
-            "blacklist_sites": None,
-            "regex_sites": None,
-        }
+        self.sites_cfg = (
+            sites_cfg
+            if sites_cfg
+            else {
+                "whitelist_sites": None,
+                "blacklist_sites": None,
+                "regex_sites": None,
+            }
+        )
         self.append_parents = append_parents
         self.get_samples(self.cfg["files"])
 
     # Function to build the dataset dictionary
     def get_samples(self, files):
         for scfg in files:
-            sname = f"{self.name}_{scfg['metadata']['year']}"
+            if 'part' in scfg['metadata']:
+                sname = f"{self.name}_{scfg['metadata']['part']}_{scfg['metadata']['year']}"
+            else:
+                sname = f"{self.name}_{scfg['metadata']['year']}"
             if not scfg["metadata"]["isMC"]:
                 sname += f"_Era{scfg['metadata']['era']}"
             if "dbs_instance" in scfg.keys():

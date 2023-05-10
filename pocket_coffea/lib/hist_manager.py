@@ -40,6 +40,11 @@ class HistConf:
     no_weights: bool = False  # Do not fill the weights
     metadata_hist: bool = False  # Non-event variables, for processing metadata
     hist_obj = None
+    collapse_2D_masks = False  # if 2D masks are applied on the events
+    # and the data_ndim=1, when collapse_2D_mask=True the OR
+    # of the masks on the axis=2 is performed to get the mask
+    # on axis=1, otherwise an exception is raised
+    collapse_2D_masks_mode = "OR"  # Use OR or AND to collapse 2D masks for data_ndim=1 if collapse_2D_masks == True
 
     def serialize(self):
         out = {**self.__dict__}
@@ -106,14 +111,18 @@ class HistManager:
     def __init__(
         self,
         hist_config,
+        year,
         sample,
         subsamples,
         categories_config,
         variations_config,
+        processor_params,
         custom_axes=None,
         isMC=True,
     ):
+        self.processor_params = processor_params
         self.isMC = isMC
+        self.year = year
         self.subsamples = subsamples
         self.histograms = defaultdict(dict)
         self.variations_config = variations_config
@@ -128,15 +137,60 @@ class HistManager:
             for cat, vars in self.variations_config["weights"].items():
                 self.available_weights_variations_bycat[cat].append("nominal")
                 for var in vars:
-                    vv = [f"{var}Up", f"{var}Down"]
-                    self.available_weights_variations += vv
-                    self.available_weights_variations_bycat[cat] += vv
+                    # Check if the variation is a wildcard and the systematic requested has subvariations
+                    # defined in the parameters
+                    if (
+                        var
+                        in self.processor_params.systematic_variations.weight_variations
+                    ):
+                        for (
+                            subvariation
+                        ) in self.processor_params.systematic_variations.weight_variations[
+                            var
+                        ][
+                            self.year
+                        ]:
+                            self.available_weights_variations += [
+                                f"{var}_{subvariation}Up",
+                                f"{var}_{subvariation}Down",
+                            ]
+                            self.available_weights_variations_bycat[cat] += [
+                                f"{var}_{subvariation}Up",
+                                f"{var}_{subvariation}Down",
+                            ]
+                    else:
+                        vv = [f"{var}Up", f"{var}Down"]
+                        self.available_weights_variations += vv
+                        self.available_weights_variations_bycat[cat] += vv
+
             # Shape variations
             for cat, vars in self.variations_config["shape"].items():
                 for var in vars:
-                    vv = [f"{var}Up", f"{var}Down"]
-                    self.available_shape_variations += vv
-                    self.available_shape_variations_bycat[cat] += vv
+                    # Check if the variation is a wildcard and the systematic requested has subvariations
+                    # defined in the parameters
+                    if (
+                        var
+                        in self.processor_params.systematic_variations.shape_variations
+                    ):
+                        for (
+                            subvariation
+                        ) in self.processor_params.systematic_variations.shape_variations[
+                            var
+                        ][
+                            self.year
+                        ]:
+                            self.available_weights_variations += [
+                                f"{var}_{subvariation}Up",
+                                f"{var}_{subvariation}Down",
+                            ]
+                            self.available_weights_variations_bycat[cat] += [
+                                f"{var}_{subvariation}Up",
+                                f"{var}_{subvariation}Down",
+                            ]
+                    else:
+                        vv = [f"{var}Up", f"{var}Down"]
+                        self.available_shape_variations += vv
+                        self.available_shape_variations_bycat[cat] += vv
             # Reduce to set over all the categories
             self.available_weights_variations = set(self.available_weights_variations)
             self.available_shape_variations = set(self.available_shape_variations)
@@ -260,7 +314,7 @@ class HistManager:
         shape_variation="nominal",
         subsamples=None,  # This is a dictionary with name:ak.Array(bool)
         custom_fields=None,
-        custom_weight=None # it should be a dictionary {variable:weight}
+        custom_weight=None,  # it should be a dictionary {variable:weight}
     ):
         '''
         We loop on the configured histograms only
@@ -378,9 +432,37 @@ class HistManager:
                     # Check if the required data is dim=1, per event,
                     # and the mask is by collection.
                     # In this case the mask is reduced to per-event mask
-                    # doing a logical OR.
+                    # doing a logical OR only if explicitely allowed by the user
+                    # WARNING!! POTENTIAL PROBLEMATIC BEHAVIOUR
+                    # The user must be aware of the behavior.
+
                     if data_ndim == 1 and mask.ndim > 1:
-                        mask = ak.any(mask, axis=1)
+                        if histo.collapse_2D_masks:
+                            if histo.collapse_2D_masks_mode == "OR":
+                                mask = ak.any(mask, axis=1)
+                            elif histo.collapse_2D_masks_mode == "AND":
+                                mask = ak.all(mask, axis=1)
+                            else:
+                                raise Exception(
+                                    "You want to collapse the 2D masks on 1D data but the `collapse_2D_masks_mode` is not 'AND/OR'"
+                                )
+
+                        else:
+                            raise Exception(
+                                "+++++ BE AWARE! This is a possible mis-behavior! +++++\n"
+                                + f"You are trying to fill the histogram {name} with data of dimention 1 (variable by event)"
+                                + "and masking it with a mask with more than 1 dimension (e.g. mask on Jets)\n"
+                                + "This means that you are either performing a cut on a collections (e.g Jets),"
+                                + " or you are using subsamples with cuts on collections.\n"
+                                + "\n As an example of a bad behaviour would be saving the pos=1 of a collection e.g. `JetGood.pt[1]`\n"
+                                + "while also having a 2D cut on the `JetGood` collection --> this is not giving you the second jet passing the cut!\n"
+                                + "In that case the 2nd JetGood.pt will be always plotted even if masked by the 2D cut: in fact "
+                                + "the 2D masks would be collapsed to the event dimension. \n\n"
+                                + "If you really wish to save the histogram with a single value for event (data dim=1)"
+                                + "you can do so by configuring the histogram with `collapse_2D_masks=True\n"
+                                + "The 2D masks will be collapsed on the event dimension (axis=1) doing an OR (default) or an AND\n"
+                                + "You can configure this behaviour with `collapse_2D_masks_mode='OR'/'AND'` in the histo configuration."
+                            )
 
                     # Mask the variables and flatten them
                     # save the isnotnone and datastructure
@@ -399,7 +481,7 @@ class HistManager:
                             # save the data structure for weights propagation
                             if not has_data_structure:
                                 data_structure = ak.ones_like(masked_data)
-                                had_data_structure = True
+                                has_data_structure = True
                             # flatten the data in one dimension
                             masked_data = ak.flatten(masked_data)
 
@@ -453,15 +535,18 @@ class HistManager:
                                     mask,
                                     data_structure,
                                 )
-                                if custom_weight != None and name in custom_weight :
+                                if custom_weight != None and name in custom_weight:
                                     weight_varied = weight_varied * mask_and_broadcast_weight(
                                         category + "customW",
-                                        subsample,  variation,
-                                        custom_weight[name], # passing the custom weight to be masked and broadcasted
+                                        subsample,
+                                        variation,
+                                        custom_weight[
+                                            name
+                                        ],  # passing the custom weight to be masked and broadcasted
                                         mask,
                                         data_structure,
                                     )
-                                    
+
                                 # Then we apply the notnone mask
                                 weight_varied = weight_varied[all_axes_isnotnone]
                                 # Fill the histogram
@@ -488,15 +573,17 @@ class HistManager:
                                 mask,
                                 data_structure,
                             )
-                            if custom_weight != None and name in custom_weight :
-                                    weight_varied = weight_varied * mask_and_broadcast_weight(
-                                        category + "customW",
-                                        subsample,
-                                        "nominal",
-                                        custom_weight[name], # passing the custom weight to be masked and broadcasted
-                                        mask,
-                                        data_structure,
-                                    )
+                            if custom_weight != None and name in custom_weight:
+                                weight_varied = weight_varied * mask_and_broadcast_weight(
+                                    category + "customW",
+                                    subsample,
+                                    "nominal",
+                                    custom_weight[
+                                        name
+                                    ],  # passing the custom weight to be masked and broadcasted
+                                    mask,
+                                    data_structure,
+                                )
                             # Then we apply the notnone mask
                             weights_nom = weights_nom[all_axes_isnotnone]
                             # Fill the histogram
