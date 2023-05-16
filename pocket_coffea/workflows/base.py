@@ -54,6 +54,7 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
 
         # Subsamples configurations: special cuts to split a sample in subsamples
         self._subsamples = self.cfg.subsamples
+        self._columns = self.cfg.columns
 
         # Weights configuration
         self.weights_config_allsamples = self.cfg.weights_config
@@ -61,7 +62,6 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
         # Load the jet calibration factory once for all chunks
         self.jmefactory = load_jet_factory(self.params)
 
-        
         # Custom axis for the histograms
         self.custom_axes = []
         self.custom_histogram_fields = {}
@@ -122,14 +122,7 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
             self._era = self.events.metadata["era"]
         # Loading metadata for subsamples
         self._hasSubsamples = self.cfg.has_subsamples[self._sample]
-        # Saving dataset metadata
-        self.output["datasets_metadata"] = {
-            self._year : {
-                    f"{self._sample}__{subsam}" : set([self._dataset])
-                    for subsam in self._subsamples[self._sample].keys()
-                }
-            }
-
+        
     def load_metadata_extra(self):
         '''
         Function that can be called by a derived processor to define additional metadata.
@@ -438,8 +431,14 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
         )
         # Saving the output for each sample/subsample
         for subs in self._subsamples[self._sample].keys():
+            # When we loop on all the subsample we need to format correctly the output if
+            # there are no subsamples
+            if self._hasSubsamples:
+                name = f"{self._sample}__{subs}"
+            else:
+                name = self._sample
             for var, H in self.hists_managers.get_histograms(subs).items():
-                self.output["variables"][var][self._dataset][f"{self._sample}__{subs}"] = H
+                self.output["variables"][var][name][self._dataset] = H
                 
 
     def fill_histograms_extra(self, variation):
@@ -456,9 +455,10 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
         '''
         self.column_managers = {}
         for subs in self._subsamples[self._sample].keys():
-            self.column_managers[subs] = ColumnsManager(
-                self.cfg.columns[f"{self._sample}__{subs}"], self._categories
-            )
+            if f"{self._sample}__{subs}" in self._columns:
+                self.column_managers[subs] = ColumnsManager(
+                    self._columns[f"{self._sample}__{subs}"], self._categories
+                )
 
     def define_column_accumulators_extra(self):
         '''
@@ -470,25 +470,29 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
         if variation != "nominal":
             return
 
-        self.output["columns"][self._dataset] = {}
-        outcols = self.output["columns"][self._dataset]
+        if len(self.column_managers) == 0:
+            return
+        
+        outcols = self.output["columns"]
         # TODO Fill column accumulator for different variations
         if self._hasSubsamples:
             # call the filling for each
             for subs in self._subsamples[self._sample].keys():
                 # Calling hist manager with a subsample mask
-               outcols[f"{self._sample}__{subs}"] = self.column_managers[subs].fill_columns(
-                    self.events,
-                    self._categories,
-                    subsample_mask=self._subsamples[self._sample].get_mask(subs),
-                )
+                self.output["columns"][f"{self._sample}__{subs}"]= {
+                    self._dataset : self.column_managers[subs].fill_columns(
+                                               self.events,
+                                               self._categories,
+                                               subsample_mask=self._subsamples[self._sample].get_mask(subs),
+                                               )
+                }
         else:
-            outcols[self._sample] = self.column_managers[
+            self.output["columns"][self._sample] = { self._dataset: self.column_managers[
                 self._sample
             ].fill_columns(
                 self.events,
                 self._categories,
-            )
+            ) }
 
     def fill_column_accumulators_extra(self, variation):
         pass
@@ -726,11 +730,11 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
     def rescale_sumgenweights(self, sumgenw_dict, output):
         # rescale each variable
         for var, vardata in output["variables"].items():
-            for dataset, dataset_data in vardata.items():
-                if dataset in sumgenw_dict:
-                    scaling = 1/sumgenw_dict[dataset]
-                    # it  means that's a MC sample
-                    for histo in dataset_data.values():
+            for sample, dataset_in_sample in vardata.items():
+                for dataset, histo in dataset_in_sample.items():
+                    if dataset in sumgenw_dict:
+                        scaling = 1/sumgenw_dict[dataset]
+                        # it  means that's a MC sample
                         histo *= scaling
 
         # rescale sumw
@@ -748,8 +752,34 @@ class BaseProcessorABC(processor.ProcessorABC, ABC):
         and `sumw` metadata using the sum of the genweights computed without preselections
         for each dataset.
 
+        Moreover the function saves in the output a dictionary of metadata
+        with the full description of the datasets taken from the configuration.
+
         To add additional customatizaion redefine the `postprocessing` function,
         but remember to include a super().postprocess() call.
         '''
         self.rescale_sumgenweights(accumulator["sum_genweights"], accumulator)
+
+        # Saving dataset metadata directly in the output file reading from the config
+        dmeta = accumulator["datasets_metadata"] = {
+            "by_datataking_period": {},
+            "by_dataset": defaultdict(dict)
+        }
+
+        for dataset in accumulator["cutflow"]["initial"].keys():
+            df = self.cfg.filesets[dataset]
+            #copying the full metadata of the used samples in the output per direct reference
+            dmeta["by_dataset"][dataset] = df["metadata"]
+            # now adding by datataking period
+            sample = df["metadata"]["sample"]
+            year = df["metadata"]["year"]
+            if year not in dmeta["by_datataking_period"]:
+                dmeta["by_datataking_period"][year] = defaultdict(set)
+
+            if self.cfg.has_subsamples[sample]:
+                for subsam in self._subsamples[sample].keys():
+                    dmeta["by_datataking_period"][year][f"{sample}__{subsam}"].add(dataset)
+            else:
+                dmeta["by_datataking_period"][year][sample].add(dataset)
+
         return accumulator

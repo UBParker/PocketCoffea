@@ -71,6 +71,7 @@ style_cfg = {
             'color': 'blue',
         },
     },
+    "collapse_datasets": True,
     "samples_map": {},
     "labels": {
         "ttHTobb": "$t\\bar{t}H\\rightarrow b\\bar{b}$",
@@ -87,4 +88,9 @@ style_cfg = {
         'ST': (1.0, 0.4, 0.4),  # red
         'WJetsToLNu_HT': '#cc99ff',  # violet
     },
+    "plot_upper_label":{
+        "by_year": {
+            "2018": "XX /fb",
+        }
+    }
 }

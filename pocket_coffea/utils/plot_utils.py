@@ -1,5 +1,7 @@
 import os
 from copy import deepcopy
+from multiprocessing import Pool
+from functools import partial
 
 import math
 import numpy as np
@@ -49,48 +51,81 @@ class PlotManager:
 
     def __init__(
         self,
-        hist_cfg,
+        variables,
+        hist_objs,
+        datasets_metadata,
         plot_dir,
-        only_cat=[''],
+        only_cat=None,
         style_cfg=style_cfg,
-        data_key="DATA",
+        workers=8,
         log=False,
         density=False,
         save=True,
     ) -> None:
+
         self.shape_objects = {}
         self.plot_dir = plot_dir
         self.only_cat = only_cat
-        self.data_key = data_key
+        self.workers = workers
         self.log = log
         self.density = density
         self.save = save
-        for name, h_dict in hist_cfg.items():
-            self.shape_objects[name] = Shape(
-                h_dict,
-                name,
-                plot_dir,
-                only_cat=self.only_cat,
-                style_cfg=style_cfg,
-                data_key=self.data_key,
-                log=self.log,
-                density=self.density,
-            )
+        self.nhists = len(variables)
 
-    def plot_datamc_all(self, syst=True, spliteras=False):
+        # Reading the datasets_metadata to
+        # build the correct shapes for each datataking year
+        # taking histo objects from hist_objs
+        self.hists_to_plot = {}
+        for variable in variables:
+            vs = {}
+            for year, samples in datasets_metadata["by_datataking_period"].items():
+                hs = {}
+                for sample, datasets in samples.items():
+                    hs[sample] = {}
+                    for dataset in datasets:
+                        try:
+                            hs[sample][dataset] = hist_objs[variable][sample][dataset]
+                        except:
+                            print(f"Warning: missing dataset {dataset} for variable {variable}, year {year}")
+                vs[year] = hs
+            self.hists_to_plot[variable] = vs
+        
+        for variable, histoplot in self.hists_to_plot.items():
+            for year, h_dict in histoplot.items():
+                name = '_'.join([variable, year])
+                self.shape_objects[name] = Shape(
+                    h_dict,
+                    datasets_metadata["by_dataset"],
+                    name,
+                    plot_dir,
+                    only_cat=self.only_cat,
+                    style_cfg=style_cfg,
+                    log=self.log,
+                    density=self.density,
+                )
+
+    def plot_datamc(self, name, syst=True, toplabel=None, spliteras=False):
+        '''Plots one histogram, for all years and categories.'''
+        shape = self.shape_objects[name]
+        if ((shape.is_mc_only) | (shape.is_data_only)):
+            ratio = False
+        else:
+            ratio = True
+        shape.plot_datamc_all(ratio, syst, toplabel=toplabel, spliteras=spliteras,  save=self.save)
+
+    def plot_datamc_all(self, syst=True, toplabel=None, spliteras=False):
         '''Plots all the histograms contained in the dictionary, for all years and categories.'''
-        for name, datamc in self.shape_objects.items():
-            if ((datamc.is_mc_only) | (datamc.is_data_only)):
-                ratio = False
-            else:
-                ratio = True
-            datamc.plot_datamc_all(ratio, syst, spliteras, save=self.save)
+        shape_names = list(self.shape_objects.keys())
+        with Pool(processes=self.workers) as pool:
+            # Parallel calls of plot_datamc() on different shape objects
+            pool.map(partial(self.plot_datamc, syst=syst, toplabel=toplabel, spliteras=spliteras), shape_names)
+            pool.close()
 
 
 class Shape:
     '''This class handles the plotting of 1D data/MC histograms.
     The constructor requires as arguments:
-    - h_dict: dictionary of histograms, with each entry corresponding to a different MC sample.
+    - h_dict: dictionary of histograms, with the following structure {}
     - name: name that identifies the Shape object.
     - style_cfg: dictionary with style and plotting options.
     - data_key: prefix for data samples (e.g. default in PocketCoffea: "DATA_SingleEle")'''
@@ -98,24 +133,25 @@ class Shape:
     def __init__(
         self,
         h_dict,
+        datasets_metadata, 
         name,
         plot_dir,
-        only_cat=[''],
+        only_cat=None,
         style_cfg=style_cfg,
-        data_key="DATA",
         log=False,
         density=False,
     ) -> None:
         self.h_dict = h_dict
         self.name = name
         self.plot_dir = plot_dir
-        self.only_cat = only_cat
+        self.only_cat = only_cat if only_cat is not None else []
         self.style = Style(style_cfg)
         if self.style.has_lumi:
             self.lumi_fraction = {year : l / lumi[year]['tot'] for year, l in self.style.lumi_processed.items()}
-        self.data_key = data_key
         self.log = log
         self.density = density
+        self.datasets_metadata=datasets_metadata
+        self.sample_is_MC = {}
         assert (
             type(h_dict) == dict
         ), "The Shape object receives a dictionary of hist.Hist objects as argument."
@@ -125,6 +161,38 @@ class Shape:
         ), f"The dimension of the histogram '{self.name}' is {self.dense_dim}. Only 1D histograms are supported."
         self.load_attributes()
 
+
+    
+
+    def load_attributes(self):
+        '''Loads the attributes from the dictionary of histograms.'''
+        assert len(
+            set([self.h_dict[s].ndim for s in self.samples_mc])
+        ), f"{self.name}: Not all the MC histograms have the same dimension."
+        assert len(
+            set([self.h_dict[s].ndim for s in self.samples_data])
+        ), f"{self.name}: Not all the data histograms have the same dimension."
+        
+        for ax in self.categorical_axes_mc:
+            setattr(
+                self,
+                {'year': 'years', 'cat': 'categories', 'variation': 'variations'}[
+                    ax.name
+                ],
+                self.get_axis_items(ax.name),
+            )
+        self.xaxis = self.dense_axes[0]
+        self.xlabel = self.xaxis.label
+        self.xcenters = self.xaxis.centers
+        self.xedges = self.xaxis.edges
+        self.xbinwidth = np.ediff1d(self.xedges)
+        self.is_mc_only = True if len(self.samples_data) == 0 else False
+        self.is_data_only = True if len(self.samples_mc) == 0 else False
+        # if self.is_data_only | (not self.is_mc_only):
+        #     self.lumi = {
+        #         year: femtobarn(lumi[year]['tot'], digits=1) for year in self.years
+        #     }
+        
     @property
     def dense_axes(self):
         '''Returns the list of dense axes of a histogram, defined as the axes that are not categorical axes.'''
@@ -196,7 +264,7 @@ class Shape:
         if len(stack) == 1:
             return stack[0]
         else:
-            htot = stack[0]
+            htot =hist.Hist(stack[0])
             for h in stack[1:]:
                 htot = htot + h
             return htot
@@ -217,14 +285,36 @@ class Shape:
 
     @property
     def samples_data(self):
-        return list(filter(lambda d: self.data_key in d, self.samples))
+        return list(filter(lambda d: not self.sample_is_MC[d], self.samples))
 
     @property
     def samples_mc(self):
-        return list(filter(lambda d: self.data_key not in d, self.samples))
+        return list(filter(lambda d: self.sample_is_MC[d], self.samples))
 
     def group_samples(self):
         '''Groups samples according to the dictionary self.style.samples_map'''
+        # # First of all check if collapse_datasets options is true,
+        # # in that case all the datasets (parts) for each sample are summed
+        if self.style.collapse_datasets:
+            # Sum over the different datasets for each sample
+            for sample, datasets in self.h_dict.items():
+                self.h_dict[sample] = self._stack_sum(
+                    stack=hist.Stack.from_dict(
+                        {s: h for s, h in datasets.items() if s in datasets}
+                    )
+                )
+                isMC = None
+                for dataset in datasets:
+                    isMC_d = self.datasets_metadata[dataset]["isMC"] == "True"
+                    if isMC is None:
+                        isMC = isMC_d
+                        self.sample_is_MC[sample] = isMC
+                    elif isMC != isMC_d:
+                        raise Exception(f"You are collapsing together data and MC histogram!")
+                    
+        else:
+            raise NotImplementedError("Plotting histograms without collapsing is still not implemented")
+        
         if not self.style.has_samples_map:
             return
         h_dict_grouped = {}
@@ -240,38 +330,14 @@ class Shape:
             if s not in samples_in_map:
                 h_dict_grouped[s] = h
         self.h_dict = deepcopy(h_dict_grouped)
+        
 
-    def load_attributes(self):
-        '''Loads the attributes from the dictionary of histograms.'''
-        assert len(
-            set([self.h_dict[s].ndim for s in self.samples_mc])
-        ), "Not all the MC histograms have the same dimension."
-        for ax in self.categorical_axes_mc:
-            setattr(
-                self,
-                {'year': 'years', 'cat': 'categories', 'variation': 'variations'}[
-                    ax.name
-                ],
-                self.get_axis_items(ax.name),
-            )
-        self.xaxis = self.dense_axes[0]
-        self.xlabel = self.xaxis.label
-        self.xcenters = self.xaxis.centers
-        self.xedges = self.xaxis.edges
-        self.xbinwidth = np.ediff1d(self.xedges)
-        self.is_mc_only = True if len(self.samples_data) == 0 else False
-        self.is_data_only = True if len(self.samples_mc) == 0 else False
-        if self.is_data_only | (not self.is_mc_only):
-            self.lumi = {
-                year: femtobarn(lumi[year]['tot'], digits=1) for year in self.years
-            }
-
-    def build_stacks(self, year, cat, spliteras=False):
-        '''Builds the data and MC stacks, applying a slicing by year and category.
+    def build_stacks(self, cat, spliteras=False):
+        '''Builds the data and MC stacks, applying a slicing by category.
         If spliteras is True, the extra axis "era" is kept in the data stack to
         distinguish between data samples from different data-taking eras.'''
-        slicing_mc = {'year': year, 'cat': cat}
-        slicing_mc_nominal = {'year': year, 'cat': cat, 'variation': 'nominal'}
+        slicing_mc = {'cat': cat}
+        slicing_mc_nominal = {'cat': cat, 'variation': 'nominal'}
         self.h_dict_mc = {d: self.h_dict[d][slicing_mc] for d in self.samples_mc}
         self.h_dict_mc_nominal = {
             d: self.h_dict[d][slicing_mc_nominal] for d in self.samples_mc
@@ -309,16 +375,16 @@ class Shape:
             # Sum over eras if specified as extra argument
             if 'era' in self.categorical_axes_data:
                 if spliteras:
-                    slicing_data = {'year': year, 'cat': cat}
+                    slicing_data = { 'cat': cat}
                 else:
-                    slicing_data = {'year': year, 'cat': cat, 'era': sum}
+                    slicing_data = {'cat': cat, 'era': sum}
             else:
                 if spliteras:
                     raise Exception(
                         "No axis 'era' found. Impossible to split data by era."
                     )
                 else:
-                    slicing_data = {'year': year, 'cat': cat}
+                    slicing_data = {'cat': cat}
             self.h_dict_data = {
                 d: self.h_dict[d][slicing_data] for d in self.samples_data
             }
@@ -338,7 +404,7 @@ class Shape:
         '''Instantiates the `SystUnc` objects and stores them in a dictionary with one entry for each systematic uncertainty.'''
         self.syst_manager = SystManager(self)
 
-    def define_figure(self, year=None, ratio=True):
+    def define_figure(self, ratio=True,  toplabel=None):
         '''Defines the figure for the Data/MC plot.
         If ratio is True, a subplot is defined to include the Data/MC ratio plot.'''
         plt.style.use([hep.style.ROOT, {'font.size': self.style.fontsize}])
@@ -357,17 +423,13 @@ class Shape:
                 loc=0,
                 ax=self.ax,
             )
-        if year:
-            if not self.is_mc_only:
-                hep.cms.lumitext(
-                    text=f'{self.lumi[year]}' + r' fb$^{-1}$, 13 TeV,' + f' {year}',
-                    fontsize=self.style.fontsize,
-                    ax=self.ax,
-                )
-            else:
-                hep.cms.lumitext(
-                    text=f'{year}', fontsize=self.style.fontsize, ax=self.ax
-                )
+        if toplabel:
+            hep.cms.lumitext(
+                text=toplabel,
+                fontsize=self.style.fontsize,
+                ax=self.ax,
+            )
+     
 
     def format_figure(self, ratio=True):
         '''Formats the figure's axes, labels, ticks, xlim and ylim.'''
@@ -480,7 +542,7 @@ class Shape:
                 1.0, *ak.Array(self.xedges)[[0, -1]], colors='gray', linestyles='dashed'
             )
 
-    def plot_datamc(self, year=None, ratio=True, syst=True, ax=None, rax=None):
+    def plot_datamc(self, ratio=True, syst=True, ax=None, rax=None):
         '''Plots the data histogram as an errorbar plot on top of the MC stacked histograms.
         If ratio is True, also the Data/MC ratio plot is plotted.
         If syst is True, also the total systematic uncertainty is plotted.'''
@@ -517,30 +579,29 @@ class Shape:
 
         self.format_figure(ratio)
 
-    def plot_datamc_all(self, ratio=True, syst=True, spliteras=False, save=True):
+    def plot_datamc_all(self, ratio=True, syst=True, toplabel=None, spliteras=False, save=True):
         '''Plots the data and MC histograms for each year and category contained in the histograms.
         If ratio is True, also the Data/MC ratio plot is plotted.
         If syst is True, also the total systematic uncertainty is plotted.'''
-        for year in self.years:
-            for cat in self.categories:
-                if not any([c in cat for c in self.only_cat]):
-                    continue
-                self.define_figure(year, ratio)
-                self.build_stacks(year, cat, spliteras)
-                self.get_systematic_uncertainty()
-                self.plot_datamc(year, ratio, syst)
-                if save:
-                    plot_dir = os.path.join(self.plot_dir, cat)
-                    if self.log:
-                        plot_dir = os.path.join(plot_dir, "log")
-                    if not os.path.exists(plot_dir):
-                        os.makedirs(plot_dir)
-                    filepath = os.path.join(plot_dir, f"{self.name}_{year}_{cat}.png")
-                    print("Saving", filepath)
-                    plt.savefig(filepath, dpi=150, format="png")
-                else:
-                    plt.show(self.fig)
-                plt.close(self.fig)
+        for cat in self.categories:
+            if self.only_cat and cat not in self.only_cat:
+                continue
+            self.define_figure(ratio, toplabel)
+            self.build_stacks(cat, spliteras)
+            self.get_systematic_uncertainty()
+            self.plot_datamc(ratio, syst)
+            if save:
+                plot_dir = os.path.join(self.plot_dir, cat)
+                if self.log:
+                    plot_dir = os.path.join(plot_dir, "log")
+                if not os.path.exists(plot_dir):
+                    os.makedirs(plot_dir)
+                filepath = os.path.join(plot_dir, f"{self.name}_{cat}.png")
+                print("Saving", filepath)
+                plt.savefig(filepath, dpi=150, format="png")
+            else:
+                plt.show(self.fig)
+            plt.close(self.fig)
 
 
 class SystManager:
