@@ -224,10 +224,10 @@ def jet_selection(events, jet_type, params, leptons_collection=""):
 
     elif jet_type == "FatJet":
         # Apply the msd and preselection cuts
-        mask_msd = events.FatJet.msoftdrop > cuts["msd"]
+        #mask_msd = events.FatJet.msoftdrop > cuts["msd"]
         ecalMask = ak.broadcast_arrays(goodEcalCalib,jets.pt)
         ecalMask = ecalMask[0]
-        mask_good_jets = mask_presel & mask_msd & ecalMask
+        mask_good_jets = mask_presel & ecalMask
 
     return jets[mask_good_jets], mask_good_jets
 
