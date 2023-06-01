@@ -37,7 +37,7 @@ btagging:
       bbtagSF_DDBvL_M1_hiPt_down: 0.67
     '2018':
       btagging_algorithm: btagDeepFlavB
-      btagging_WP: 0.277
+      btagging_WP: 0.2783
       bbtagging_algorithm: btagDDBvL
       bbtagging_WP: 0.86
       bbtagSF_DDBvL_M1_loPt: 0.81

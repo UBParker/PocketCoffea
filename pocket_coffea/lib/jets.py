@@ -220,14 +220,16 @@ def jet_selection(events, jet_type, params, leptons_collection=""):
         mask_jetpuid = (jets.puId >= cuts["puId"]["value"]) | (
             jets.pt >= cuts["puId"]["maxpt"]
         )
-        mask_good_jets = mask_presel & mask_lepton_cleaning & mask_jetpuid
+        dR_jets_fatJets = jets.metric_table(events["FatJetGood"])
+        mask_fatjet_cleaning = ak.prod(dR_jets_fatJets > 0.8, axis=2) == 1
+        mask_good_jets = mask_presel & mask_lepton_cleaning & mask_jetpuid & mask_fatjet_cleaning
 
     elif jet_type == "FatJet":
         # Apply the msd and preselection cuts
         #mask_msd = events.FatJet.msoftdrop > cuts["msd"]
         ecalMask = ak.broadcast_arrays(goodEcalCalib,jets.pt)
         ecalMask = ecalMask[0]
-        mask_good_jets = mask_presel & ecalMask
+        mask_good_jets = mask_presel & mask_lepton_cleaning & ecalMask
 
     return jets[mask_good_jets], mask_good_jets
 
