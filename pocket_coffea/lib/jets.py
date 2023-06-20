@@ -236,3 +236,11 @@ def jet_selection(events, jet_type, params, leptons_collection=""):
 
 def btagging(Jet, btag):
     return Jet[Jet[btag["btagging_algorithm"]] > btag["btagging_WP"]]
+
+def bbtagging(Jet, btag, WP):
+    if(WP=="L"):
+        return Jet[Jet[btag["bbtagging_algorithm"]] > btag["bbtagging_WP_L"]]
+    if(WP=="M"):
+        return Jet[Jet[btag["bbtagging_algorithm"]] > btag["bbtagging_WP_M"]]
+    if(WP=="T"):
+        return Jet[Jet[btag["bbtagging_algorithm"]] > btag["bbtagging_WP_T"]]
