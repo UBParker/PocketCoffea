@@ -40,6 +40,10 @@ class ttHbbBaseProcessor(BaseProcessorABC):
         )
         self.events["LeptonGood"] = leptons[ak.argsort(leptons.pt, ascending=False)]
 
+        self.events["FatJetGood"], self.jetGoodMask = jet_selection(
+            self.events, "FatJet", self.params, "LeptonGood"
+        )
+        
         self.events["JetGood"], self.jetGoodMask = jet_selection(
             self.events, "Jet", self.params, "LeptonGood"
         )
@@ -49,15 +53,12 @@ class ttHbbBaseProcessor(BaseProcessorABC):
 
 
 
-        if self.cfg.finalstate == 'dilepton':
-            self.events["ll"] = get_dilepton(
+        #if self.cfg.finalstate == 'dilepton':
+        self.events["ll"] = get_dilepton(
                 self.events.ElectronGood, self.events.MuonGood
-            )
-
-        self.events["FatJetGood"], self.jetGoodMask = jet_selection(
-            self.events, "FatJet", self.cfg.finalstate
         )
 
+        
     def count_objects(self, variation):
         self.events["nMuonGood"] = ak.num(self.events.MuonGood)
         self.events["nElectronGood"] = ak.num(self.events.ElectronGood)

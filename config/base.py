@@ -109,7 +109,7 @@ cfg =  {
         **jet_hists(name="bjet",coll="BJetGood", pos=0),
         **jet_hists(name="bjet",coll="BJetGood", pos=1),
         **jet_hists(name="bjet",coll="BJetGood", pos=2),
-        **fatjet_hists(name="fatjet",coll="FatJetGood"),
+        **fatjet_hists(name="fatjet",coll="FatJetGood", pos=0),
 
         # 2D plots
         "jet_eta_pt_leading": HistConf(
